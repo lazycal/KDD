@@ -90,44 +90,44 @@ data_api = data_api.drop(columns=['id'])
 ############## concat ##############
 data = pd.concat([data_file, data_api])
 stations = set(data['stationId'])
-data.drop_duplicates(subset=['stationId', 'utc_time'], inplace=True)
 data = data.loc[pd.notnull(data['utc_time']) & pd.notnull(data['stationId'])]
 data['utc_time'] = pd.to_datetime(data['utc_time'])
-data.reset_index(drop=True, inplace=True)
+data.drop_duplicates(subset=['stationId', 'utc_time'], inplace=True)
 data['hour'] = data['utc_time'].dt.hour
+data.reset_index(drop=True, inplace=True)
 
-from collections import Counter 
-assert(len(data.index) == len(set(data.index)))
-for s in stations:
-    ind = data[data['stationId']==s].index
-    assert len(ind) == len(set(ind)), Counter(ind)
+def check_no_dup(data):
+    from collections import Counter 
+    for s in stations:
+        ind = data[data['stationId']==s].utc_time
+        assert len(ind) == len(set(ind)), (s, Counter(ind))
+check_no_dup(data)
 
+gas = ['PM10', 'NO2', 'PM2.5', 'CO', 'O3', 'SO2']
 def create_dataset(df, lagging=72):
-    def create_lagging(df, df_original, i, targets):
-        df1 = df_original.copy()
-        df1['utc_time'] = df1['utc_time'] + pd.DateOffset(hours=i)
-        df1 = df1.rename(columns={t: t + '-' + str(i) for t in targets})
-        df2 = pd.merge(df, df1[['stationId', 'utc_time'] + [t + '-' + str(i) for t in targets]],
-                       on=['stationId', 'utc_time'],
-                       how='left')
-        return df2
-        
     def fillna(df):
         df = df.copy()
-        for c in ['PM10', 'NO2', 'PM2.5']:
+        for c in gas:
             df[c] = df.groupby(['city', 'utc_time'], sort=False)[c].apply(lambda x: x.fillna(x.median()))
             df[c] = df.groupby(['stationId', 'hour'], sort=False)[c].apply(lambda x: x.fillna(x.median()))
+
+        if df.isna().any().any():
+            for c in gas:
+                df[c] = df.groupby(['hour'], sort=False)[c].apply(lambda x: x.fillna(x.median()))
         return df
     
     df = fillna(df)
     return df
 
 df = create_dataset(data)
+assert not df.isna().any().any(), ("dataset still contains NaN.", df.isna().any())
 df.to_csv('./data/temp/data_fillna.csv', index=False)
+print('fillna done')
 
 # Rearrange weather data
 
 aq_info = pd.read_csv('./data/temp/data_fillna.csv')
+aq_info.utc_time = pd.to_datetime(aq_info.utc_time)
 match_info = pd.read_csv('./data/rearranged/aq_meo_match.csv')
 
 aq_meo_match = {}
@@ -138,8 +138,8 @@ for i in range(match_cnt):
     aq_grid_match[match_info['aq'][i]] = match_info['grid'][i]
 print aq_info.head()
 
-aq_info = aq_info[(True-aq_info['stationId'].isin(['BX9', 'BX1', 'CT2', 'CT3', 'CR8', 
-                                             'GB0', 'HR1', 'LH0', 'KC1', 'RB7', 'TD5']))]
+aq_info = aq_info[~aq_info['stationId'].isin(['BX9', 'BX1', 'CT2', 'CT3', 'CR8', 
+                                             'GB0', 'HR1', 'LH0', 'KC1', 'RB7', 'TD5'])]
 aq_info['meo'] = aq_info['stationId'].apply(lambda x:aq_meo_match[x])
 aq_info['grid'] = aq_info['stationId'].apply(lambda x:aq_grid_match[x])
 
@@ -161,3 +161,5 @@ meo_info = pd.concat([bj_meo_info, ld_meo_info, bj_new_meo_info, ld_new_meo_info
 
 aq_info = pd.merge(aq_info, meo_info, on=['grid', 'utc_time'], how='left')
 aq_info.to_csv('./data/data.csv', index=False)
+visAll(aq_info)
+visAll(data, 'has_na')
