@@ -26,8 +26,5 @@ def visAll(aq_info, suf=''):
 
             except Exception as e:
                 print(e)
-    #         plt.title('{}_{}.png'.format(city, c))
 
             plt.savefig('./fig/{}_{}_{}.png'.format(city, c, suf))
-visAll(aq_info)
-visAll(data, 'has_na')

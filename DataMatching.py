@@ -6,6 +6,7 @@ import numpy as np
 import pyflux as pf
 import matplotlib.pyplot as plt
 import requests
+from collections import Counter 
 # import xgboost as xgb
 import datetime
 
@@ -96,37 +97,22 @@ data.drop_duplicates(subset=['stationId', 'utc_time'], inplace=True)
 data['hour'] = data['utc_time'].dt.hour
 data.reset_index(drop=True, inplace=True)
 
+############# fill blank hours #####
+# all_hours = pd.DataFrame({'utc_time':pd.date_range('2017-02-01 00:00:00', data.utc_time.max(), freq='1H')})
+# print(data.tail())
+# data1 = pd.merge(data, all_hours, on=['utc_time'], how='right', validate='m:1')
+# print(data1.head())
+
 def check_no_dup(data):
-    from collections import Counter 
     for s in stations:
         ind = data[data['stationId']==s].utc_time
         assert len(ind) == len(set(ind)), (s, Counter(ind))
 check_no_dup(data)
 
-gas = ['PM10', 'NO2', 'PM2.5', 'CO', 'O3', 'SO2']
-def create_dataset(df, lagging=72):
-    def fillna(df):
-        df = df.copy()
-        for c in gas:
-            df[c] = df.groupby(['city', 'utc_time'], sort=False)[c].apply(lambda x: x.fillna(x.median()))
-            df[c] = df.groupby(['stationId', 'hour'], sort=False)[c].apply(lambda x: x.fillna(x.median()))
-
-        if df.isna().any().any():
-            for c in gas:
-                df[c] = df.groupby(['hour'], sort=False)[c].apply(lambda x: x.fillna(x.median()))
-        return df
-    
-    df = fillna(df)
-    return df
-
-df = create_dataset(data)
-assert not df.isna().any().any(), ("dataset still contains NaN.", df.isna().any())
-df.to_csv('./data/temp/data_fillna.csv', index=False)
-print('fillna done')
-
 # Rearrange weather data
 
-aq_info = pd.read_csv('./data/temp/data_fillna.csv')
+# aq_info = pd.read_csv('./data/temp/data_fillna.csv')
+aq_info = data
 aq_info.utc_time = pd.to_datetime(aq_info.utc_time)
 match_info = pd.read_csv('./data/rearranged/aq_meo_match.csv')
 
@@ -158,8 +144,38 @@ bj_new_meo_info = bj_new_meo_info.drop(['id'], axis=1)
 ld_new_meo_info = ld_new_meo_info.drop(['id'], axis=1)
 
 meo_info = pd.concat([bj_meo_info, ld_meo_info, bj_new_meo_info, ld_new_meo_info])
+meo_info.utc_time = pd.to_datetime(meo_info.utc_time)
 
 aq_info = pd.merge(aq_info, meo_info, on=['grid', 'utc_time'], how='left')
-aq_info.to_csv('./data/data.csv', index=False)
-visAll(aq_info)
-visAll(data, 'has_na')
+
+############# fillna ###################
+
+def fillna(df):
+    gas = set(df.columns)-set(['utc_time', 'city', 'stationId', 'meo', 'grid', 'weather']) # TODO: Add weather 
+    #['PM10', 'NO2', 'PM2.5', 'CO', 'O3', 'SO2'] # TODO: more collumns
+    a=df.groupby(['city', 'utc_time'], sort=False)
+    b=df.groupby(['stationId', 'hour'], sort=False)
+    df = df.copy()
+    def fill(df, group):
+        a = df.groupby(group, sort=False)
+        for c in gas:
+            df[c] = a[c].apply(lambda x: x.fillna(x.median()))
+        
+    if df.isna().any().any():
+        fill(df, ['city', 'utc_time'])
+        
+    if df.isna().any().any():
+        fill(df, ['stationId', 'hour'])
+        
+#     if df.isna().any().any():
+#         for c in gas:
+#             df[c] = df.groupby(['hour'], sort=False)[c].apply(lambda x: x.fillna(x.median()))
+    return df
+
+aq_info_fillna = fillna(aq_info)
+# assert not aq_info_fillna.isna().any().any(), ("dataset still contains NaN.", aq_info_fillna.isna().any())
+# aq_info.to_csv('./data/temp/data_fillna.csv', index=False)
+print('fillna done')
+aq_info_fillna.to_csv('./data/data.csv', index=False)
+# visAll(aq_info_fillna)
+# visAll(aq_info, 'has_na')
