@@ -1,14 +1,12 @@
 #encoding=utf-8
 import pandas as pd
-from statsmodels.tsa.stattools import adfuller
-import statsmodels.tsa.stattools as st
 import numpy as np
-import pyflux as pf
 import matplotlib.pyplot as plt
 import requests
 from collections import Counter 
 # import xgboost as xgb
 import datetime
+from vis import visAll
 
 #encoding=utf-8
 import pandas as pd
@@ -34,9 +32,9 @@ def UpdateAqData():
     text = respones.text
     with open ("./data/temp/bj-data.csv", 'w') as f:
         f.write(text)
-    new_info = pd.read_csv('./data/temp/bj-data.csv')
-    old_info = pd.read_csv('./data/raw/Beijing_aq_20180405.csv')
-    old_info = pd.concat([old_info, new_info]).drop_duplicates()
+    new_info = pd.read_csv('./data/temp/bj-data.csv', parse_dates=['time'])
+    old_info = pd.read_csv('./data/raw/Beijing_aq_20180405.csv', parse_dates=['time'])
+    old_info = pd.concat([old_info, new_info]).drop_duplicates(keep='last', subset=['time', 'station_id'])
     old_info.sort_values(by=['time']).to_csv('./data/raw/Beijing_aq_20180405.csv', index=False)
 
     url = 'https://biendata.com/competition/airquality/ld/' + time_period + '/2k0d1d8'
@@ -44,9 +42,9 @@ def UpdateAqData():
     text = respones.text
     with open ("./data/temp/ld-data.csv", 'w') as f:
         f.write(text)
-    new_info = pd.read_csv('./data/temp/ld-data.csv')
-    old_info = pd.read_csv('./data/raw/London_aq_20180405.csv')
-    old_info = pd.concat([old_info, new_info]).drop_duplicates()
+    new_info = pd.read_csv('./data/temp/ld-data.csv', parse_dates=['time'])
+    old_info = pd.read_csv('./data/raw/London_aq_20180405.csv', parse_dates=['time'])
+    old_info = pd.concat([old_info, new_info]).drop_duplicates(keep='last', subset=['time', 'station_id'])
     old_info.sort_values(by=['time']).to_csv('./data/raw/London_aq_20180405.csv', index=False)
 
 def UpdateMeoInfo():
@@ -60,18 +58,18 @@ def UpdateMeoInfo():
     response = requests.get(url)
     with open('./data/temp/bj-data.csv', 'w') as f:
         f.write(response.text)
-    new_info = pd.read_csv('./data/temp/bj-data.csv')
-    old_info = pd.read_csv('./data/raw/Beijing_grid_20180405.csv')
-    old_info = pd.concat([old_info, new_info]).drop_duplicates()
+    new_info = pd.read_csv('./data/temp/bj-data.csv', parse_dates=['time'])
+    old_info = pd.read_csv('./data/raw/Beijing_grid_20180405.csv', parse_dates=['time'])
+    old_info = pd.concat([old_info, new_info]).drop_duplicates(keep='last', subset=['time', 'station_id'])
     old_info.sort_values(by=['time']).to_csv('./data/raw/Beijing_grid_20180405.csv', index=False)    
 
     url = 'https://biendata.com/competition/meteorology/ld_grid/' + time_period + '/2k0d1d8'
     response = requests.get(url)
     with open('./data/temp/ld-data.csv', 'w') as f:
         f.write(response.text)
-    new_info = pd.read_csv('./data/temp/ld-data.csv')
-    old_info = pd.read_csv('./data/raw/London_grid_20180405.csv')
-    old_info = pd.concat([old_info, new_info]).drop_duplicates()
+    new_info = pd.read_csv('./data/temp/ld-data.csv', parse_dates=['time'])
+    old_info = pd.read_csv('./data/raw/London_grid_20180405.csv', parse_dates=['time'])
+    old_info = pd.concat([old_info, new_info]).drop_duplicates(keep='last', subset=['time', 'station_id'])
     old_info.sort_values(by=['time']).to_csv('./data/raw/London_grid_20180405.csv', index=False)    
 
 # Rearrange aq data
@@ -106,21 +104,29 @@ stations = set(data['stationId'])
 data = data.loc[pd.notnull(data['utc_time']) & pd.notnull(data['stationId'])]
 data['utc_time'] = pd.to_datetime(data['utc_time'])
 data.drop_duplicates(subset=['stationId', 'utc_time'], inplace=True)
+
+############# fill blank hours #####
+bj_cities = set(data[data.city == 'bj'].stationId.unique())
+date_range = pd.date_range('2017-03-01 00:00:00', data.utc_time.max(), freq='1H')
+new_index = pd.MultiIndex.from_product([data['stationId'].unique(), date_range],
+                                       names=['stationId', 'utc_time'])
+df1 = pd.DataFrame(index=new_index).reset_index()
+data = pd.merge(df1, data, on=['stationId', 'utc_time'], how='left', validate='1:m')
+data.city = data.stationId.map(lambda x: 'bj' if x in bj_cities else 'ld')
+data = data.sort_values(by=['utc_time', 'stationId'])
+
+############# add hour column #####
 data['hour'] = data['utc_time'].dt.hour
 data.reset_index(drop=True, inplace=True)
 
-############# fill blank hours #####
-# all_hours = pd.DataFrame({'utc_time':pd.date_range('2017-02-01 00:00:00', data.utc_time.max(), freq='1H')})
-# print(data.tail())
-# data1 = pd.merge(data, all_hours, on=['utc_time'], how='right', validate='m:1')
-# print(data1.head())
-
+############ check no duplicates
 def check_no_dup(data):
     for s in stations:
         ind = data[data['stationId']==s].utc_time
         assert len(ind) == len(set(ind)), (s, Counter(ind))
 check_no_dup(data)
-
+data.to_csv('./data/temp/phase1.csv', index=False)
+print("Finish phase1")
 # Rearrange weather data
 
 # aq_info = pd.read_csv('./data/temp/data_fillna.csv')
@@ -143,10 +149,10 @@ aq_info['grid'] = aq_info['stationId'].apply(lambda x:aq_grid_match[x])
 
 UpdateMeoInfo()
 
-bj_meo_info = pd.read_csv('./data/raw/Beijing_historical_meo_grid.csv')
-ld_meo_info = pd.read_csv('./data/raw/London_historical_meo_grid.csv')
-bj_new_meo_info = pd.read_csv('./data/raw/Beijing_grid_20180405.csv')
-ld_new_meo_info = pd.read_csv('./data/raw/London_grid_20180405.csv')
+bj_meo_info = pd.read_csv('./data/raw/Beijing_historical_meo_grid.csv', parse_dates=['utc_time'])
+ld_meo_info = pd.read_csv('./data/raw/London_historical_meo_grid.csv', parse_dates=['utc_time'])
+bj_new_meo_info = pd.read_csv('./data/raw/Beijing_grid_20180405.csv', parse_dates=['time'])
+ld_new_meo_info = pd.read_csv('./data/raw/London_grid_20180405.csv', parse_dates=['time'])
 
 bj_meo_info = bj_meo_info.rename(index=str, columns={'stationName' : 'grid', 'wind_speed/kph' : 'wind_speed'})
 ld_meo_info = ld_meo_info.rename(index=str, columns={'stationName' : 'grid', 'wind_speed/kph' : 'wind_speed'})
@@ -159,8 +165,13 @@ meo_info = pd.concat([bj_meo_info, ld_meo_info, bj_new_meo_info, ld_new_meo_info
 meo_info.utc_time = pd.to_datetime(meo_info.utc_time)
 
 aq_info = pd.merge(aq_info, meo_info, on=['grid', 'utc_time'], how='left')
+aq_info = aq_info.drop_duplicates(subset=['utc_time', 'stationId']) ## important
+# assert aq_info.duplicated(subset=['utc_time', 'stationId']).any() == False, aq_info.duplicated(subset=['utc_time', 'stationId'])
+aq_info = aq_info.sort_values(by=['utc_time', 'stationId'])
+aq_info.to_csv('./data/data_na.csv', index=False)
 
 ############# fillna ###################
+print('performing fillna')
 
 def fillna(df):
     gas = set(df.columns)-set(['utc_time', 'city', 'stationId', 'meo', 'grid', 'weather']) # TODO: Add weather 
@@ -176,8 +187,8 @@ def fillna(df):
     if df.isna().any().any():
         fill(df, ['city', 'utc_time'])
         
-    if df.isna().any().any():
-        fill(df, ['stationId', 'hour'])
+    # if df.isna().any().any():
+    #     fill(df, ['stationId', 'hour'])
         
 #     if df.isna().any().any():
 #         for c in gas:
