@@ -10,10 +10,22 @@ from collections import Counter
 # import xgboost as xgb
 import datetime
 
+#encoding=utf-8
+import pandas as pd
+from statsmodels.tsa.stattools import adfuller
+import statsmodels.tsa.stattools as st
+import numpy as np
+import pyflux as pf
+import matplotlib.pyplot as plt
+import requests
+from collections import Counter 
+# import xgboost as xgb
+import datetime
+
 def UpdateAqData():
     time_now = datetime.datetime.utcnow()
     time_text = time_now.strftime('20%y-%m-%d')
-    start_time = time_text + '-0'
+    start_time = (time_now + pd.DateOffset(n=-2)).strftime('20%y-%m-%d') + '-0'
     end_time = time_text + '-23'
     time_period = start_time + '/' + end_time
 
@@ -24,8 +36,8 @@ def UpdateAqData():
         f.write(text)
     new_info = pd.read_csv('./data/temp/bj-data.csv')
     old_info = pd.read_csv('./data/raw/Beijing_aq_20180405.csv')
-    old_info = pd.merge(old_info, new_info, how='outer')
-    old_info.to_csv('./data/raw/Beijing_aq_20180405.csv', index=False)
+    old_info = pd.concat([old_info, new_info]).drop_duplicates()
+    old_info.sort_values(by=['time']).to_csv('./data/raw/Beijing_aq_20180405.csv', index=False)
 
     url = 'https://biendata.com/competition/airquality/ld/' + time_period + '/2k0d1d8'
     respones = requests.get(url)
@@ -34,13 +46,13 @@ def UpdateAqData():
         f.write(text)
     new_info = pd.read_csv('./data/temp/ld-data.csv')
     old_info = pd.read_csv('./data/raw/London_aq_20180405.csv')
-    old_info = pd.merge(old_info, new_info, how='outer')
-    old_info.to_csv('./data/raw/London_aq_20180405.csv', index=False)
+    old_info = pd.concat([old_info, new_info]).drop_duplicates()
+    old_info.sort_values(by=['time']).to_csv('./data/raw/London_aq_20180405.csv', index=False)
 
 def UpdateMeoInfo():
     time_now = datetime.datetime.utcnow()
     time_text = time_now.strftime('20%y-%m-%d')
-    start_time = time_text + '-0'
+    start_time = (time_now + pd.DateOffset(n=-2)).strftime('20%y-%m-%d') + '-0'
     end_time = time_text + '-23'
     time_period = start_time + '/' + end_time
     
@@ -50,8 +62,8 @@ def UpdateMeoInfo():
         f.write(response.text)
     new_info = pd.read_csv('./data/temp/bj-data.csv')
     old_info = pd.read_csv('./data/raw/Beijing_grid_20180405.csv')
-    old_info = pd.merge(old_info, new_info, how='outer')
-    old_info.to_csv('./data/raw/Beijing_grid_20180405.csv', index=False)    
+    old_info = pd.concat([old_info, new_info]).drop_duplicates()
+    old_info.sort_values(by=['time']).to_csv('./data/raw/Beijing_grid_20180405.csv', index=False)    
 
     url = 'https://biendata.com/competition/meteorology/ld_grid/' + time_period + '/2k0d1d8'
     response = requests.get(url)
@@ -59,8 +71,8 @@ def UpdateMeoInfo():
         f.write(response.text)
     new_info = pd.read_csv('./data/temp/ld-data.csv')
     old_info = pd.read_csv('./data/raw/London_grid_20180405.csv')
-    old_info = pd.merge(old_info, new_info, how='outer')
-    old_info.to_csv('./data/raw/London_grid_20180405.csv', index=False)    
+    old_info = pd.concat([old_info, new_info]).drop_duplicates()
+    old_info.sort_values(by=['time']).to_csv('./data/raw/London_grid_20180405.csv', index=False)    
 
 # Rearrange aq data
 UpdateAqData()
@@ -170,6 +182,7 @@ def fillna(df):
 #     if df.isna().any().any():
 #         for c in gas:
 #             df[c] = df.groupby(['hour'], sort=False)[c].apply(lambda x: x.fillna(x.median()))
+# TODO: drop
     return df
 
 aq_info_fillna = fillna(aq_info)

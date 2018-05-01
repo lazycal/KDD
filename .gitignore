@@ -3,3 +3,8 @@
 tmp
 *.jpg
 *.png
+ljk/output
+launch.json
+*.pyc
+*.xls
+*.xlsx
