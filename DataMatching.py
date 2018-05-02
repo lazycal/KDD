@@ -10,15 +10,48 @@ from vis import visAll
 
 #encoding=utf-8
 import pandas as pd
-from statsmodels.tsa.stattools import adfuller
-import statsmodels.tsa.stattools as st
 import numpy as np
-import pyflux as pf
 import matplotlib.pyplot as plt
 import requests
 from collections import Counter 
 # import xgboost as xgb
 import datetime
+
+def fetch_forcast_city(city):
+    time_now = datetime.datetime.utcnow()
+    cnt = 0
+    fetched = False
+    while not fetched and cnt < 48:
+        time_text = time_now.strftime('20%y-%m-%d-%H')
+        start_time = time_text
+        print(time_text)
+
+        url = 'http://kdd.caiyunapp.com/competition/forecast/{}/'.format(city) + start_time + '/2k0d1d8'
+        respones = requests.get(url)
+        text = respones.text
+        if text == 'None':
+            print('forcast response=', text)
+            cnt += 1
+            time_now -= datetime.timedelta(hours=1)
+            continue
+        fetched = True
+        with open ("./data/temp/{}-forcast.csv".format(city), 'w') as f:
+            f.write(text)
+        return pd.read_csv('./data/temp/{}-forcast.csv'.format(city), parse_dates=['forecast_time'])
+
+def fetch_forcast():
+    bj = fetch_forcast_city('bj')
+    ld = fetch_forcast_city('ld')
+    if bj is not None and ld is not None:
+        df = pd.concat([bj, ld]).drop_duplicates(keep='last', subset=['forecast_time', 'station_id'])
+        df = df.rename(index=str, columns={'station_id' : 'stationId', 'forecast_time': 'utc_time'}).drop(['id'], axis=1)
+        df = df.sort_values(['stationId', 'utc_time'])
+        # fillna
+        if df.isna().any().any():
+            for c in (set(df.columns) - set(['utc_time', 'stationId'])):
+                if df[c].isna().any():
+                    df[c] = df[c].fillna(method='ffill')
+        df.to_csv('./data/forcast.csv', index=False)
 
 def UpdateAqData():
     time_now = datetime.datetime.utcnow()
@@ -72,6 +105,8 @@ def UpdateMeoInfo():
     old_info = pd.concat([old_info, new_info]).drop_duplicates(keep='last', subset=['time', 'station_id'])
     old_info.sort_values(by=['time']).to_csv('./data/raw/London_grid_20180405.csv', index=False)    
 
+fetch_forcast()
+print('forcast fetched')
 # Rearrange aq data
 UpdateAqData()
 ## load from files
@@ -165,6 +200,17 @@ meo_info = pd.concat([bj_meo_info, ld_meo_info, bj_new_meo_info, ld_new_meo_info
 meo_info.utc_time = pd.to_datetime(meo_info.utc_time)
 
 aq_info = pd.merge(aq_info, meo_info, on=['grid', 'utc_time'], how='left')
+bj_wea_info = pd.concat([
+    pd.read_csv('./data/raw/beijing_17_18_meo.csv', parse_dates=['utc_time']), 
+    pd.read_csv('./data/raw/beijing_201802_201803_me.csv', parse_dates=['utc_time'])
+]).rename(index=str, columns={'station_id' : 'meo'}).drop_duplicates(subset=['utc_time', 'meo'])
+
+aq_info = aq_info.set_index(['utc_time', 'meo'])
+bj_wea_info = bj_wea_info.set_index(['utc_time', 'meo'])[['weather']]
+
+aq_info.update(bj_wea_info)
+aq_info = aq_info.reset_index()
+
 aq_info = aq_info.drop_duplicates(subset=['utc_time', 'stationId']) ## important
 # assert aq_info.duplicated(subset=['utc_time', 'stationId']).any() == False, aq_info.duplicated(subset=['utc_time', 'stationId'])
 aq_info = aq_info.sort_values(by=['utc_time', 'stationId'])
@@ -174,19 +220,21 @@ aq_info.to_csv('./data/data_na.csv', index=False)
 print('performing fillna')
 
 def fillna(df):
-    gas = set(df.columns)-set(['utc_time', 'city', 'stationId', 'meo', 'grid', 'weather']) # TODO: Add weather 
-    #['PM10', 'NO2', 'PM2.5', 'CO', 'O3', 'SO2'] # TODO: more collumns
-    a=df.groupby(['city', 'utc_time'], sort=False)
-    b=df.groupby(['stationId', 'hour'], sort=False)
+    # gas = set(df.columns)-set(['utc_time', 'city', 'stationId', 'meo', 'grid', 'weather']) # TODO: Add weather 
+    gas = set(['PM10', 'NO2', 'PM2.5', 'CO', 'O3', 'SO2']) # TODO: more collumns
     df = df.copy()
     def fill(df, group):
         a = df.groupby(group, sort=False)
         for c in gas:
-            df[c] = a[c].apply(lambda x: x.fillna(x.median()))
-        
-    if df.isna().any().any():
-        fill(df, ['city', 'utc_time'])
-        
+            if df[c].isna().any():
+                df[c] = a[c].apply(lambda x: x.fillna(x.median()))
+    fill(df, ['city', 'utc_time'])
+   
+    df = df.sort_values(['stationId', 'utc_time'])
+    for c in (set(df.columns) - gas - set(['utc_time', 'city', 'stationId', 'meo', 'grid'])):
+        if df[c].isna().any():
+            df[c] = df[c].fillna(method='ffill')
+
     # if df.isna().any().any():
     #     fill(df, ['stationId', 'hour'])
         
@@ -196,7 +244,7 @@ def fillna(df):
 # TODO: drop
     return df
 
-aq_info_fillna = fillna(aq_info)
+aq_info_fillna = fillna(aq_info).sort_values(['utc_time', 'stationId'])
 # assert not aq_info_fillna.isna().any().any(), ("dataset still contains NaN.", aq_info_fillna.isna().any())
 # aq_info.to_csv('./data/temp/data_fillna.csv', index=False)
 print('fillna done')
