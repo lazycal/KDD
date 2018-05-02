@@ -1,8 +1,5 @@
 import pandas as pd
-from statsmodels.tsa.stattools import adfuller
-import statsmodels.tsa.stattools as st
 import numpy as np
-import pyflux as pf
 import matplotlib.pyplot as plt
 
 def visAll(aq_info, suf=''):
@@ -10,7 +7,7 @@ def visAll(aq_info, suf=''):
     for city in ['bj', 'ld']:
         for c in set(aq_info.columns)-set(['utc_time', 'city', 'stationId', 'meo', 'grid', 'weather']):
             print(city, c)
-            plt.figure()
+            plt.clf()
             try:
                 df=pd.pivot_table(aq_info[aq_info['city']==city].reset_index(),
                                index='utc_time', columns='stationId', values=c
@@ -28,3 +25,9 @@ def visAll(aq_info, suf=''):
                 print(e)
 
             plt.savefig('./fig/{}_{}_{}.png'.format(city, c, suf))
+
+if __name__ == '__main__':
+    aq_info = pd.read_csv('./data/data_na.csv')
+    aq_info_fillna = pd.read_csv('./data/data.csv')
+    visAll(aq_info_fillna)
+    visAll(aq_info, 'has_na')
