@@ -17,7 +17,7 @@ from collections import Counter
 # import xgboost as xgb
 import datetime
 
-def fetch_forcast_city(city):
+def fetch_forecast_city(city):
     time_now = datetime.datetime.utcnow()
     cnt = 0
     fetched = False
@@ -30,28 +30,28 @@ def fetch_forcast_city(city):
         respones = requests.get(url)
         text = respones.text
         if text == 'None':
-            print('forcast response=', text)
+            print('forecast response=', text)
             cnt += 1
             time_now -= datetime.timedelta(hours=1)
             continue
         fetched = True
-        with open ("./data/temp/{}-forcast.csv".format(city), 'w') as f:
+        with open ("./data/temp/{}-forecast.csv".format(city), 'w') as f:
             f.write(text)
-        return pd.read_csv('./data/temp/{}-forcast.csv'.format(city), parse_dates=['forecast_time'])
+        return pd.read_csv('./data/temp/{}-forecast.csv'.format(city), parse_dates=['forecast_time'])
 
-def fetch_forcast():
-    bj = fetch_forcast_city('bj')
-    ld = fetch_forcast_city('ld')
+def fetch_forecast():
+    bj = fetch_forecast_city('bj')
+    ld = fetch_forecast_city('ld')
     if bj is not None and ld is not None:
         df = pd.concat([bj, ld]).drop_duplicates(keep='last', subset=['forecast_time', 'station_id'])
-        df = df.rename(index=str, columns={'station_id' : 'stationId', 'forecast_time': 'utc_time'}).drop(['id'], axis=1)
-        df = df.sort_values(['stationId', 'utc_time'])
+        df = df.rename(index=str, columns={'station_id' : 'grid', 'forecast_time': 'utc_time'}).drop(['id'], axis=1)
+        df = df.sort_values(['grid', 'utc_time'])
         # fillna
         if df.isna().any().any():
-            for c in (set(df.columns) - set(['utc_time', 'stationId'])):
+            for c in (set(df.columns) - set(['utc_time', 'grid'])):
                 if df[c].isna().any():
                     df[c] = df[c].fillna(method='ffill')
-        df.to_csv('./data/forcast.csv', index=False)
+        df.to_csv('./data/forecast.csv', index=False)
 
 def UpdateAqData():
     time_now = datetime.datetime.utcnow()
@@ -105,8 +105,8 @@ def UpdateMeoInfo():
     old_info = pd.concat([old_info, new_info]).drop_duplicates(keep='last', subset=['time', 'station_id'])
     old_info.sort_values(by=['time']).to_csv('./data/raw/London_grid_20180405.csv', index=False)    
 
-fetch_forcast()
-print('forcast fetched')
+fetch_forecast()
+print('forecast fetched')
 # Rearrange aq data
 UpdateAqData()
 ## load from files
@@ -142,7 +142,8 @@ data.drop_duplicates(subset=['stationId', 'utc_time'], inplace=True)
 
 ############# fill blank hours #####
 bj_cities = set(data[data.city == 'bj'].stationId.unique())
-date_range = pd.date_range('2017-03-01 00:00:00', data.utc_time.max(), freq='1H')
+future60 = datetime.datetime.utcnow() + datetime.timedelta(hours=60)
+date_range = pd.date_range('2017-03-01 00:00:00', future60, freq='1H')
 new_index = pd.MultiIndex.from_product([data['stationId'].unique(), date_range],
                                        names=['stationId', 'utc_time'])
 df1 = pd.DataFrame(index=new_index).reset_index()
@@ -188,6 +189,7 @@ bj_meo_info = pd.read_csv('./data/raw/Beijing_historical_meo_grid.csv', parse_da
 ld_meo_info = pd.read_csv('./data/raw/London_historical_meo_grid.csv', parse_dates=['utc_time'])
 bj_new_meo_info = pd.read_csv('./data/raw/Beijing_grid_20180405.csv', parse_dates=['time'])
 ld_new_meo_info = pd.read_csv('./data/raw/London_grid_20180405.csv', parse_dates=['time'])
+forc_meo_info = pd.read_csv('./data/forecast.csv', parse_dates=['utc_time'])
 
 bj_meo_info = bj_meo_info.rename(index=str, columns={'stationName' : 'grid', 'wind_speed/kph' : 'wind_speed'})
 ld_meo_info = ld_meo_info.rename(index=str, columns={'stationName' : 'grid', 'wind_speed/kph' : 'wind_speed'})
@@ -196,7 +198,7 @@ ld_new_meo_info = ld_new_meo_info.rename(index=str, columns={'station_id' : 'gri
 bj_new_meo_info = bj_new_meo_info.drop(['id'], axis=1)
 ld_new_meo_info = ld_new_meo_info.drop(['id'], axis=1)
 
-meo_info = pd.concat([bj_meo_info, ld_meo_info, bj_new_meo_info, ld_new_meo_info])
+meo_info = pd.concat([bj_meo_info, ld_meo_info, bj_new_meo_info, ld_new_meo_info, forc_meo_info])
 meo_info.utc_time = pd.to_datetime(meo_info.utc_time)
 
 aq_info = pd.merge(aq_info, meo_info, on=['grid', 'utc_time'], how='left')

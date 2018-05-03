@@ -8,3 +8,4 @@ launch.json
 *.pyc
 *.xls
 *.xlsx
+*.log
