@@ -18,19 +18,63 @@ from collections import Counter
 import re
 import argparse
 
-def createGenNext(target, df=None, deploy=False): # df: initial value
+def createGenNext(self, target, df=None, deploy=False): # df: initial value
+    # @profile
+    def find_new_X_test(new_X_test):
+        tmp = df[df.utc_time == new_X_test.iloc[0].utc_time]
+        # print('len(tmp)={}'.format(len(tmp)))
+        if len(tmp) > 0:
+            assert len(tmp) == 1
+            return tmp, True
+        return None, False
+
+    # @profile
     def genNext(X_test, y_pred, features):
         assert len(X_test) == 1
         new_X_test = X_test.copy()
         new_X_test.utc_time += pd.DateOffset(hours=1)
+        if 'hour' in new_X_test.columns:
+            new_X_test['hour'] = (1 + new_X_test['hour']) % 24
         find = False
         if df is not None: 
-            tmp = df[df.utc_time == new_X_test.iloc[0].utc_time]
-            # print('len(tmp)={}'.format(len(tmp)))
-            if len(tmp) > 0:
-                assert len(tmp) == 1
+            tmp, find = find_new_X_test(new_X_test)
+            assert find, 'date {} not found'.format(new_X_test.utc_time)
+            tmp = tmp.copy().reset_index(drop=True)
+
+        new_X_test = new_X_test.reset_index(drop=True)
+        for c in ([target] + self.lag_cols):
+            for i in range(1, self.lags):
+                new_X_test[lag_format(c, i + 1)] = new_X_test[lag_format(c, i)]
+            new_X_test[lag_format(c, 1)] = new_X_test[c]
+            if df is not None:
+                new_X_test[c] = tmp[c]
+        if not deploy:
+            new_X_test[lag_format(target, 1)] = y_pred
+        return new_X_test
+    return genNext
+
+def createGenNextOld(target, df=None, deploy=False): # df: initial value
+    # @profile
+    def find_new_X_test(new_X_test):
+        tmp = df[df.utc_time == new_X_test.iloc[0].utc_time]
+        # print('len(tmp)={}'.format(len(tmp)))
+        if len(tmp) > 0:
+            assert len(tmp) == 1
+            return tmp, True
+        return None, False
+
+    # @profile
+    def genNext(X_test, y_pred, features):
+        assert len(X_test) == 1
+        new_X_test = X_test.copy()
+        new_X_test.utc_time += pd.DateOffset(hours=1)
+        if 'hour' in new_X_test.columns:
+            new_X_test['hour'] = (1 + new_X_test['hour']) % 24
+        find = False
+        if df is not None: 
+            tmp, find = find_new_X_test(new_X_test)
+            if find:
                 new_X_test = tmp.copy()
-                find = True
         # lags = [_ for _ in X_test.column if _.find(lag_format(target, '')) != -1] 
         new_X_test = new_X_test.reset_index(drop=True)
         X_test = X_test.reset_index(drop=True)
@@ -43,25 +87,10 @@ def createGenNext(target, df=None, deploy=False): # df: initial value
                     new_X_test[c] = X_test['{}_lag_{}'.format(name, lag_idx - 1)]
                 elif name in X_test.columns and name != target:
                     new_X_test[c] = X_test[name]
-        if 'hour' in new_X_test.columns:
-            new_X_test['hour'] = (1 + new_X_test['hour']) % 24
         if not find or not deploy or new_X_test[lag_format(target, 1)].isna().any():
             new_X_test[lag_format(target, 1)] = y_pred
         return new_X_test
     return genNext
-
-# @profile
-def genFeatures1(t, df):
-    cols = ['temperature', 'pressure', 'humidity', 'wind_direction', 'wind_speed', 'weather', t]
-    if df['weather'].isna().all():
-        print('London city')
-        cols.remove('weather')
-    features = []
-    for c in cols:
-        features += [_ for _ in df.columns if _.find(lag_format(c, '')) != -1]
-    features += ['hour'] + cols#, 'temperature', 'pressure', 'humidity', 'wind_direction', 'wind_speed']
-    features.remove(t)
-    return features   
 
 # @profile
 def genFeatures2(t, df): # arma
@@ -85,13 +114,14 @@ class Strategy(object):
         pass
 
     def createGenNext(self, target, deploy=False):
-        return createGenNext(target)
+        return createGenNextOld(target)
 
 class Strategy1(Strategy):
     def __init__(self, args):
         Strategy.__init__(self, args)
-        print('Strategy1: using: \n')
-        print(['hour', 'temperature', 'pressure', 'humidity', 'wind_direction', 'wind_speed'])
+        self.lag_cols = ['temperature', 'pressure', 'humidity', 'wind_direction', 'wind_speed', 'weather']
+        self.lags = args.lag
+        print('Strategy1: \nlag: {}, using: {}\n'.format(args.lag, self.lag_cols + ['hour']))
         # self.forc = pd.read_csv('../data/forcast.csv', parse_dates=['utc_time'])
         # self.forc.weather = self.forc.weather.astype('category')
 
@@ -116,10 +146,20 @@ class Strategy1(Strategy):
         # self.df.to_csv("../data/temp/test.csv")
         
     def genFeatures(self, t, df):
-        return genFeatures1(t, df)
+        cols = self.lag_cols + [t]
+        if df['weather'].isna().all():
+            print('London city')
+            cols.remove('weather')
+        features = []
+        for c in cols:
+            features += [_ for _ in df.columns if _.find(lag_format(c, '')) != -1]
+        features += ['hour'] + cols#, 'temperature', 'pressure', 'humidity', 'wind_direction', 'wind_speed']
+        features.remove(t)
+        return features   
 
     def createGenNext(self, target, deploy=False):
-        return createGenNext(target, self.cur_station_df, deploy=deploy)
+        # return createGenNext(self, target, self.cur_station_df, deploy=deploy)
+        return createGenNextOld(target, self.cur_station_df, deploy=deploy)
 
 class Strategy2(Strategy):
     def __init__(self, args):
@@ -130,7 +170,7 @@ class Strategy2(Strategy):
         return genFeatures2(t, df)
 
     def createGenNext(self, target, deploy=False):
-        return createGenNext(target, self.cur_station_df, deploy=deploy)
+        return createGenNextOld(target, self.cur_station_df, deploy=deploy)
 
 def getStrategy(name, args):
     if name == 'Strategy1':

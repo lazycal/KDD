@@ -55,6 +55,7 @@ def smape(predicted, train_data):
 #         #     X_test.iloc[i + j][lag_format(target, j)] = y_pred[-1]
 #     return y_pred
 
+# @profile
 def gbm_predict(gbm, df, length, st, genNext, features): # No nan allowed in df[features]
     assert not df[features].isna().any().any(), 'gbm_predict: No nan allowed in df[features]'
     X_test = df[df.utc_time <= st].iloc[-1:]
@@ -73,28 +74,36 @@ def gbm_predict(gbm, df, length, st, genNext, features): # No nan allowed in df[
     return y_pred[-length:]
 
 # @profile
+# def split(df, ratio):
+#     st = df.utc_time.max()
+#     st = st - datetime.timedelta(hours=st.hour)
+#     if ratio[1] == 'num': num = ratio[0]
+#     else: num = int(n * ratio[0])
+#     print(num)
+#     while True:
+#         hours = pd.date_range(st, st + datetime.timedelta(hours=num-1), freq='1H')
+#         if len(df[df.utc_time.isin(hours)]) >= num * 0.8 and len(df[df.utc_time == st]) > 0:
+#             tmp = df[df.utc_time.isin(hours)]
+#             ind = tmp.index[0]
+#             return df.loc[:ind].iloc[:-1], tmp, hours
+#         st -= pd.DateOffset(n=1)
+#     return df.iloc[:-num], df.iloc[-num:], hours
+
 def split(df, ratio):
-    st = df.utc_time.max()
-    st = st - datetime.timedelta(hours=st.hour)
-    if ratio[1] == 'num': num = ratio[0]
-    else: num = int(n * ratio[0])
-    print(num)
-    while True:
-        hours = pd.date_range(st, st + datetime.timedelta(hours=num-1), freq='1H')
-        if len(df[df.utc_time.isin(hours)]) >= num * 0.8 and len(df[df.utc_time == st]) > 0:
-            tmp = df[df.utc_time.isin(hours)]
-            ind = tmp.index[0]
-            return df.loc[:ind].iloc[:-1], tmp, hours
-        st -= pd.DateOffset(n=1)
-    return df.iloc[:-num], df.iloc[-num:], hours
+    df_train = df.loc[df['utc_time'] <= pd.to_datetime('2018-04-20')]
+    df_test = df.loc[df['utc_time'] > pd.to_datetime('2018-04-20')]
+    if not args.deploy:
+        df_test = df_test.loc[df_test['utc_time'] < pd.to_datetime('2018-05-04')] # use the same dataset as validation set
+
+    return df_train, df_test
 
 # @profile
 def train(df, features, target, ratio):
     assert(ratio[1] == 'num')
     print('target=', target)
     df = df.dropna(subset=features + [target]) # TODO: dropna consecutive violated
-    # df_train, df_test, date_range = split(df, ratio)
-    df_train, df_test = df.iloc[:-ratio[0]], df.iloc[-ratio[0]:]
+    df_train, df_test = split(df, ratio)
+    # df_train, df_test = df.iloc[:-ratio[0]], df.iloc[-ratio[0]:]
     assert df_train.utc_time.max() < df_test.utc_time.min()
     date_range = df_test.utc_time
 
@@ -253,7 +262,7 @@ def work(df, import_table, t, s, _s, score_table, ans):
     features = stra.genFeatures(t, df)
     def set_ans(gbm, ans):
         # get next midnight's time
-        st = df_slice.dropna(subset=[t]).utc_time.max()
+        st = datetime.datetime.utcnow().replace(minute=0, second=0, microsecond=0) #df_slice.dropna(subset=[t]).utc_time.max()
         st = st - timedelta(hours=st.hour) + timedelta(days=1)
         print('st={}'.format(st))
         predict = pd.DataFrame(gbm_predict(gbm, df_slice.dropna(subset=features), 48, st, stra.createGenNext(t, deploy=True), features))
@@ -282,13 +291,16 @@ def work(df, import_table, t, s, _s, score_table, ans):
     mod, score, date_range, importance = train(df_slice, features, t, (args.num_eval, 'num'))
     if not deploy:
         # date_range = pd.date_range(date_range.min(), df_slice.dropna(subset=[t]).utc_time.max(), freq='1H')
-        Min = datetime.datetime.utcnow().replace(minute=0, second=0, microsecond=0) - timedelta(hours=args.num_eval)
-        date_range = pd.date_range(Min, df_slice.dropna(subset=[t]).utc_time.max(), freq='1H')
+        # Min = datetime.datetime.utcnow().replace(minute=0, second=0, microsecond=0) - timedelta(hours=args.num_eval)
+        Min = date_range.min()
+        # date_range = pd.date_range(Min, df_slice.dropna(subset=[t]).utc_time.max(), freq='1H')
+        date_range = pd.date_range(Min, date_range.max(), freq='1H')
         score, y_pred, y_test = evaluate(mod, df_slice, features, t, date_range, stra.createGenNext(t))
     sys.stdout = sys.__stdout__
     if deploy:
         set_ans(mod, ans)
     if not deploy:
+        print_prof_data()
         importance['gas'] = t
         import_table = pd.concat([import_table, importance]) if import_table is not None else importance
 
