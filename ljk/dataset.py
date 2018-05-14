@@ -23,10 +23,24 @@ def read_raw(raw_path):
     # raw_data.drop(['weather'], axis=1, inplace=True)
     raw_data.weather = raw_data.weather.astype('category')
     raw_data.utc_time = pd.to_datetime(raw_data.utc_time)
+    for gas in ['PM2.5', 'PM10', 'O3']:
+        raw_data[gas + '_raw'] = raw_data[gas]
     return raw_data
 
 def create_dataset1(raw_path, MaxLagging = 3):
     raw_data = read_raw(raw_path)
+    targets = ['temperature', 'pressure', 'humidity', 'wind_direction', 'wind_speed', 'CO', 'NO2', 'O3', 'PM10', 'PM2.5', 'SO2', 'weather']
+    df1 = create_lagging(raw_data, raw_data, 1, targets)
+    for i in range(2, MaxLagging + 1):
+        print('lagging: %d'%i)
+        df1 = create_lagging(df1, raw_data, i, targets)
+    df1.hour = df1.utc_time.dt.hour
+    return df1.sort_values(by=['utc_time', 'stationId'])
+
+def create_dataset5(raw_path, MaxLagging = 3):
+    raw_data = read_raw(raw_path)
+    for gas in ['PM2.5', 'PM10', 'O3']:
+        raw_data[gas] = np.log1p(np.maximum(raw_data[gas], 0))
     targets = ['temperature', 'pressure', 'humidity', 'wind_direction', 'wind_speed', 'CO', 'NO2', 'O3', 'PM10', 'PM2.5', 'SO2', 'weather']
     df1 = create_lagging(raw_data, raw_data, 1, targets)
     for i in range(2, MaxLagging + 1):

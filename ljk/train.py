@@ -228,7 +228,9 @@ def evaluate(gbm, df_slice, features, t, date_range, genNext):
         y_pred += stra.gbm_predict(gbm, df_slice_dropna, 48, st, genNext, features)
         df_test_slice = df_test[df_test.utc_time >= st].iloc[:48]
         # print('df_test_slice=\n{}'.format(df_test_slice))
-        y_test += list(df_test_slice[t])
+        y_test += list(df_test_slice[t+'_raw'])
+        assert df_test_slice.utc_time.min() >= st and df_test_slice.utc_time.max() < st + timedelta(hours=48) and \
+            df_test_slice.utc_time.is_unique, df_test_slice.utc_time
         tot += 48
         st += pd.DateOffset(n=1)
     print('y_test=\n{}'.format(y_test))
@@ -252,6 +254,8 @@ def work(df, import_table, t, s, _s, score_table, ans):
         # get next midnight's time
         st = datetime.datetime.utcnow().replace(minute=0, second=0, microsecond=0) #df_slice.dropna(subset=[t]).utc_time.max()
         st = st - timedelta(hours=st.hour) + timedelta(days=1)
+        if args.predict_date is not None:
+            st = args.predict_date
         print('st={}'.format(st))
         predict = pd.DataFrame(stra.gbm_predict(gbm, df_slice.dropna(subset=features), 48, st, stra.createGenNext(t, deploy=True), features))
         assert len(predict) == 48, 'length != 48'
@@ -319,11 +323,15 @@ def main():
     parser.add_argument("--max-bin", type=int, default=255)
     parser.add_argument("--es", type=int, default=40)
     parser.add_argument("--num-threads", type=int, default=2)
-    
-
+    parser.add_argument("--predict-date", type=str, default=None)
     args = parser.parse_args()
+
     if args.deploy and args.outcsv is None:
         parser.error('--outcsv is required when --deploy is selected')
+    if args.predict_date is not None:
+        args.predict_date = datetime.datetime.strptime(args.predict_date,'%Y-%m-%d')
+        # from dateutil import tz
+        # args.predict_date = args.predict_date.replace(tzinfo=tz.tzutc())
     OutPath = args.out#sys.argv[1]
     deploy = args.deploy
 

@@ -97,14 +97,20 @@ def genFeatures2(t, df): # arma
     cols = [t]
     features = []
     for c in cols:
-        features += [_ for _ in df.columns if _.find(lag_format(c, '')) != -1]
+        features += [_ for _ in df.columns if _.find(lag_kformat(c, '')) != -1]
     features += ['hour']
     return features
 
 class Strategy(object):
-    def __init__(self, args):
+    def __init__(self, args, creator=dataset.create_dataset1):
         self.args = args
-        self.dataset = dataset.create_dataset1('../data/data.csv', MaxLagging=args.lag)
+        self.dataset = creator('../data/data.csv', MaxLagging=args.lag)
+        if args.predict_date is not None:
+            for gas in ['PM2.5', 'PM10', 'O3']:
+                for i in range(args.lag + 1):
+                    self.dataset.loc[self.dataset.utc_time >= args.predict_date, lag_format(gas, i)] = np.nan
+                    # print('Latest one with non-nan {} in dataset : '.format(lag_format(gas, i)), self.dataset.dropna(subset=[lag_format(gas, i)]).utc_time.max())
+        print('Latest of dataset: ', self.dataset.utc_time.max())
 
     def setStation(self, stationId):
         self.stationId = stationId
@@ -134,8 +140,8 @@ class Strategy(object):
         return y_pred[-length:]
 
 class Strategy1(Strategy):
-    def __init__(self, args):
-        Strategy.__init__(self, args)
+    def __init__(self, args, *other):
+        Strategy.__init__(self, args, *other)
         self.lag_cols = ['temperature', 'pressure', 'humidity', 'wind_direction', 'wind_speed', 'weather']
         self.lags = args.lag
         print('Strategy1: \nlag: {}, using: {}\n'.format(args.lag, self.lag_cols + ['hour']))
@@ -284,6 +290,15 @@ class Strategy4(Strategy):
     def createGenNext(self, target, deploy=False):
         return createGenNextOld(target, self.cur_station_df, deploy=deploy)
 
+class Strategy5(Strategy1):
+    def __init__(self, args):
+        Strategy1.__init__(self, args, dataset.create_dataset5)
+        print("Strategy5 log1p")
+        
+    def gbm_predict(self, *args, **kwargs):
+        res = Strategy1.gbm_predict(self, *args, **kwargs)
+        print(res)
+        return list(np.expm1(res))
 
 def getStrategy(name, args):
     if name == 'Strategy1':
@@ -294,5 +309,7 @@ def getStrategy(name, args):
         return Strategy3(args)
     elif name == 'Strategy4':
         return Strategy4(args)
+    elif name == 'Strategy5':
+        return Strategy5(args)
     else:
         raise ValueError("No such strategy")
