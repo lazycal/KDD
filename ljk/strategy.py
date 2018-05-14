@@ -115,6 +115,23 @@ class Strategy(object):
 
     def createGenNext(self, target, deploy=False):
         return createGenNextOld(target)
+    
+    def gbm_predict(self, gbm, df, length, st, genNext, features): # No nan allowed in df[features]
+        assert not df[features].isna().any().any(), 'gbm_predict: No nan allowed in df[features]'
+        X_test = df[df.utc_time <= st].iloc[-1:]
+        # X_test = X_test[features]
+        ed = st + datetime.timedelta(hours=length)
+        y_pred = []
+        t = X_test.iloc[0].utc_time
+        print('To predict {}, start from {}'.format(st, t))
+        while t != ed:
+            # print(X_test[['utc_time']+features])
+            y_pred.append(max(0, gbm.predict(X_test[features])[0]))
+            X_test = genNext(X_test, y_pred[-1], features)
+            t += datetime.timedelta(hours=1)
+
+        print(y_pred)
+        return y_pred[-length:]
 
 class Strategy1(Strategy):
     def __init__(self, args):
@@ -145,7 +162,7 @@ class Strategy1(Strategy):
         # self.df = pd.concat([self.dataset, self.df]).drop_duplicates(keep='first', subset=['utc_time', 'stationId'])
         # self.df.to_csv("../data/temp/test.csv")
         
-    def genFeatures(self, t, df):
+    def genFeatures(self, t, df, **kwargs):
         cols = self.lag_cols + [t]
         if df['weather'].isna().all():
             print('London city')
@@ -166,7 +183,7 @@ class Strategy2(Strategy):
         Strategy.__init__(self, args)
         print('Strategy2: using: arma\n')
         
-    def genFeatures(self, t, df): #
+    def genFeatures(self, t, df, **kwargs): #
         return genFeatures2(t, df)
 
     def createGenNext(self, target, deploy=False):
@@ -183,3 +200,99 @@ def getStrategy(name, args):
 # PM2.5 wind_speed hour wind_dir weather humidity
 # PM10  hour wind_speed humidity wind_dir
 # O3:   hour temp wind_speed humidity wind_dir
+
+
+def _gen_from_dict(d):
+    res = []
+    for k, v in d.items():
+        if type(v) == int:
+            v = range(v + 1)
+        for i in v:
+            res.append(lag_format(k, i))
+    return res
+
+class Strategy3(Strategy):
+    def __init__(self, args):
+        Strategy.__init__(self, args)
+        self.PM25 = {
+            'wind_speed': 3,
+            'wind_direction': 5,
+            'PM2.5': args.lag,
+            'humidity': 0,
+            'weather': 0,
+            'hour': 0,
+        }
+        self.PM10 = {
+            'wind_speed': [0, 1, 2, 13],
+            'wind_direction': 5,
+            'PM10': args.lag,
+            'humidity': [0, 4, 5, 24],
+            'weather': 0,
+            'pressure': 0,
+            'hour': 0
+        }
+        self.O3 = {
+            'O3': args.lag,
+            'hour': 0,
+            'wind_speed': 4,
+            'temperature': 1,
+            'humidity': 0,
+            'wind_direction': 1,
+        }
+        self.features = {
+            'PM2.5': _gen_from_dict(self.PM25),
+            'PM10': _gen_from_dict(self.PM10),
+            'O3': _gen_from_dict(self.O3)
+        }
+        print('Strategy3: using: PM2.5\n')
+        
+    def genFeatures(self, t, df, **kwargs): #
+        features = []
+        for c in self.features[t]:
+            if c in df.columns:
+                features.append(c)
+        features.remove(t)
+        print(features)
+        return features
+
+    def createGenNext(self, target, deploy=False):
+        return createGenNextOld(target, self.cur_station_df, deploy=deploy)
+
+
+class Strategy4(Strategy):
+    def __init__(self, args):
+        Strategy.__init__(self, args)
+        self.features = pd.read_csv("../data/import_table.csv")
+        self.thres = args.thres
+        print('Strategy3: using import_table\n')
+        
+    def genFeatures(self, t, df, **kwargs): #
+        s = self.stationId
+        features = list(self.features[(self.features.stationId == s) & (self.features.gas == t) & (self.features.importance > self.thres)].feature)
+        self_lag = []
+        for f in features:
+            match = re.match(r'{}_lag_(\d+)'.format(t), f)
+            if match is not None:
+                self_lag.append(int(match.group(1)))
+        self_lag = set(self_lag)
+        for i in range(1, max(self_lag)):
+            if i not in self_lag:
+                features.append(lag_format(t, i))
+        print(features)
+        return features
+
+    def createGenNext(self, target, deploy=False):
+        return createGenNextOld(target, self.cur_station_df, deploy=deploy)
+
+
+def getStrategy(name, args):
+    if name == 'Strategy1':
+        return Strategy1(args)
+    elif name == 'Strategy2':
+        return Strategy2(args)
+    elif name == 'Strategy3':
+        return Strategy3(args)
+    elif name == 'Strategy4':
+        return Strategy4(args)
+    else:
+        raise ValueError("No such strategy")

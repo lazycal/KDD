@@ -7,7 +7,7 @@ from collections import Counter
 import datetime
 
 def lag_format(t, i):
-    return '{}_lag_{}'.format(t, i)
+    return '{}_lag_{}'.format(t, i) if i > 0 else t
 
 def create_lagging(df, df_original, i, targets):
     df1 = df_original.copy()

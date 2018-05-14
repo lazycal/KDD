@@ -56,24 +56,6 @@ def smape(predicted, train_data):
 #     return y_pred
 
 # @profile
-def gbm_predict(gbm, df, length, st, genNext, features): # No nan allowed in df[features]
-    assert not df[features].isna().any().any(), 'gbm_predict: No nan allowed in df[features]'
-    X_test = df[df.utc_time <= st].iloc[-1:]
-    # X_test = X_test[features]
-    ed = st + datetime.timedelta(hours=length)
-    y_pred = []
-    t = X_test.iloc[0].utc_time
-    print('To predict {}, start from {}'.format(st, t))
-    while t != ed:
-        # print(X_test[['utc_time']+features])
-        y_pred.append(max(0, gbm.predict(X_test[features])[0]))
-        X_test = genNext(X_test, y_pred[-1], features)
-        t += datetime.timedelta(hours=1)
-
-    print(y_pred)
-    return y_pred[-length:]
-
-# @profile
 # def split(df, ratio):
 #     st = df.utc_time.max()
 #     st = st - datetime.timedelta(hours=st.hour)
@@ -91,6 +73,7 @@ def gbm_predict(gbm, df, length, st, genNext, features): # No nan allowed in df[
 
 def split(df, ratio):
     df_train = df.loc[df['utc_time'] <= pd.to_datetime('2018-04-20')]
+    # df_train = df.loc[(df['utc_time'] <= pd.to_datetime('2017-06-01')) & (df['utc_time'] >= pd.to_datetime('2017-04-01'))]
     df_test = df.loc[df['utc_time'] > pd.to_datetime('2018-04-20')]
     if not args.deploy:
         df_test = df_test.loc[df_test['utc_time'] < pd.to_datetime('2018-05-04')] # use the same dataset as validation set
@@ -104,7 +87,7 @@ def train(df, features, target, ratio):
     df = df.dropna(subset=features + [target]) # TODO: dropna consecutive violated
     df_train, df_test = split(df, ratio)
     # df_train, df_test = df.iloc[:-ratio[0]], df.iloc[-ratio[0]:]
-    assert df_train.utc_time.max() < df_test.utc_time.min()
+    assert df_train.utc_time.max() < df_test.utc_time.min(), (df_train.utc_time.max(), df_test.utc_time.min())
     date_range = df_test.utc_time
 
     print(df_train.tail())
@@ -166,7 +149,7 @@ def train(df, features, target, ratio):
     print('Finish 10 - 20 rounds with model file...')
 
     # feature importances
-    importance = map(int, list(100 * gbm.feature_importance().astype(np.float) / gbm.feature_importance().sum()))
+    importance = list(100 * gbm.feature_importance().astype(np.float) / gbm.feature_importance().sum())
     print('Feature importances:')
     importance = pd.DataFrame({"feature": gbm.feature_name(), "importance": importance})
     print(importance.sort_values(by=['importance']))
@@ -196,10 +179,15 @@ def fix(target_stations, ref):
         res[target_stations[i]] = target_stations[i]
         if target_stations[i].find('_') == -1: continue
         t = target_stations[i].split('_')[0]
-        for s in ref:
-            if s[:len(t)] == t:
-                res[target_stations[i]] = s
-                break
+        if t == 'miyun': 
+            res[target_stations[i]] = 'miyun_aq'
+        elif t == 'miyunshuik':
+            res[target_stations[i]] = 'miyunshuiku_aq'
+        else:
+            for s in ref:
+                if s[:len(t)] == t:
+                    res[target_stations[i]] = s
+                    break
     return res
 # @profile
 def save_mod(gbm, path, s):
@@ -237,7 +225,7 @@ def evaluate(gbm, df_slice, features, t, date_range, genNext):
     tot = 0
     df_test = pd.merge(df_slice, pd.DataFrame({'utc_time': date_range}), how='right', on='utc_time').sort_values(by=['utc_time'])
     while st + timedelta(days=1) < ed:
-        y_pred += gbm_predict(gbm, df_slice_dropna, 48, st, genNext, features)
+        y_pred += stra.gbm_predict(gbm, df_slice_dropna, 48, st, genNext, features)
         df_test_slice = df_test[df_test.utc_time >= st].iloc[:48]
         # print('df_test_slice=\n{}'.format(df_test_slice))
         y_test += list(df_test_slice[t])
@@ -265,7 +253,7 @@ def work(df, import_table, t, s, _s, score_table, ans):
         st = datetime.datetime.utcnow().replace(minute=0, second=0, microsecond=0) #df_slice.dropna(subset=[t]).utc_time.max()
         st = st - timedelta(hours=st.hour) + timedelta(days=1)
         print('st={}'.format(st))
-        predict = pd.DataFrame(gbm_predict(gbm, df_slice.dropna(subset=features), 48, st, stra.createGenNext(t, deploy=True), features))
+        predict = pd.DataFrame(stra.gbm_predict(gbm, df_slice.dropna(subset=features), 48, st, stra.createGenNext(t, deploy=True), features))
         assert len(predict) == 48, 'length != 48'
         # cur_date = df_slice.dropna(subset=[t]).utc_time.max() + pd.DateOffset(hours=1)
         # cur_h = cur_date.hour
@@ -290,18 +278,18 @@ def work(df, import_table, t, s, _s, score_table, ans):
     sys.stdout = open(os.path.join(OutPath, s, '{}.log'.format(t)), 'w')
     mod, score, date_range, importance = train(df_slice, features, t, (args.num_eval, 'num'))
     if not deploy:
-        # date_range = pd.date_range(date_range.min(), df_slice.dropna(subset=[t]).utc_time.max(), freq='1H')
-        # Min = datetime.datetime.utcnow().replace(minute=0, second=0, microsecond=0) - timedelta(hours=args.num_eval)
         Min = date_range.min()
-        # date_range = pd.date_range(Min, df_slice.dropna(subset=[t]).utc_time.max(), freq='1H')
         date_range = pd.date_range(Min, date_range.max(), freq='1H')
+        if args.no_evaluate:
+            date_range = pd.date_range(Min, Min, freq='1H')
+            print(date_range)
         score, y_pred, y_test = evaluate(mod, df_slice, features, t, date_range, stra.createGenNext(t))
     sys.stdout = sys.__stdout__
-    if deploy:
-        set_ans(mod, ans)
     if not deploy:
         print_prof_data()
         importance['gas'] = t
+        importance['stationId'] = s
+        importance['city'] = df_slice.iloc[0].city
         import_table = pd.concat([import_table, importance]) if import_table is not None else importance
 
         score_table[t].append(score)
@@ -309,6 +297,8 @@ def work(df, import_table, t, s, _s, score_table, ans):
         # save_mod(mod, os.path.join(OutPath, s), t)
         print('score={}'.format(score))
         print('mean={}'.format(np.array(filter(lambda x: x==x, score_table[t])).mean()))
+    if deploy:
+        set_ans(mod, ans)
     return import_table
 
 # @profile
@@ -319,10 +309,12 @@ def main():
     parser.add_argument("--outcsv")
     parser.add_argument("--num-eval", type=int, default=24*4)
     parser.add_argument("--deploy", action="store_true")
+    parser.add_argument("--no-evaluate", action="store_true")
     parser.add_argument("--lag", type=int, default=12)
     parser.add_argument("--strategy", default='Strategy2')
     parser.add_argument("--num-leaves", type=int, default=31)
     parser.add_argument("--lr", type=float, default=0.05)
+    parser.add_argument("--thres", type=float, default=0.05)
     parser.add_argument("--max-iter", type=int, default=400)
     parser.add_argument("--max-bin", type=int, default=255)
     parser.add_argument("--es", type=int, default=40)
@@ -350,6 +342,7 @@ def main():
     # ans3 = ans.copy()
     fix_map = fix(target_stations, stations)
     print(target_stations, len(target_stations))
+    print(fix_map)
 
     score_table = {'stationId': [], 'PM2.5': [], "PM10":[], "O3": []}
     import_table = None
@@ -363,10 +356,10 @@ def main():
             import_table = work(df, import_table, t, s, _s, score_table, ans)
 
     if not deploy:
-        pd.DataFrame(score_table).to_csv(os.path.join(OutPath, 'score.csv'))
-        import_table.to_csv(os.path.join(OutPath, 'import_table.csv'))
+        pd.DataFrame(score_table).to_csv(os.path.join(OutPath, 'score.csv'), index=False)
+        import_table.to_csv(os.path.join(OutPath, 'import_table.csv'), index=False)
         pd.DataFrame(import_table.groupby(['gas', 'feature']).mean()).reset_index()\
-            .sort_values(by=['gas', 'importance'], ascending=False).to_csv(os.path.join(OutPath, 'import_table_sorted.csv'))
+            .sort_values(by=['gas', 'importance'], ascending=False).to_csv(os.path.join(OutPath, 'import_table_sorted.csv'), index=False)
     if deploy:
         ans.to_csv(args.outcsv, index=False)
     print('elapsed time={}s'.format(time.time() - st))
