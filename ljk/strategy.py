@@ -89,6 +89,7 @@ def createGenNextOld(target, df=None, deploy=False): # df: initial value
                     new_X_test[c] = X_test[name]
         if not find or not deploy or new_X_test[lag_format(target, 1)].isna().any():
             new_X_test[lag_format(target, 1)] = y_pred
+        # print(np.expm1(new_X_test[ [lag_format(target, i) for i in range(13)] ].iloc[0].values))
         return new_X_test
     return genNext
 
@@ -297,8 +298,9 @@ class Strategy5(Strategy1):
         
     def gbm_predict(self, *args, **kwargs):
         res = Strategy1.gbm_predict(self, *args, **kwargs)
+        res = list(np.expm1(res))
         print(res)
-        return list(np.expm1(res))
+        return res
 
 def getStrategy(name, args):
     if name == 'Strategy1':

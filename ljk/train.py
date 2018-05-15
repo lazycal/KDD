@@ -30,7 +30,8 @@ def check_no_dup(data):
 
 # @profile
 def _smape(actual, predicted):
-    actual = np.maximum(0, np.array(actual))
+    actual = map(lambda x: np.nan if x < 0 else x, actual)
+    predicted = map(lambda x: np.nan if x < 0 else x, predicted)
     a = np.abs(np.array(actual) - np.array(predicted))
 #     a[~(a==a)]=0
     b = np.array(actual) + np.array(predicted)
@@ -76,6 +77,8 @@ def split(df, ratio):
     # df_train = df.loc[(df['utc_time'] <= pd.to_datetime('2017-06-01')) & (df['utc_time'] >= pd.to_datetime('2017-04-01'))]
     df_test = df.loc[df['utc_time'] > pd.to_datetime('2018-04-20')]
     if not args.deploy:
+        # df_test = df.loc[df['utc_time'] >= pd.to_datetime('2018-05-01')]
+        # df_test = df_test.loc[df_test['utc_time'] <= pd.to_datetime('2018-05-16')] # use the same dataset as validation set
         df_test = df_test.loc[df_test['utc_time'] < pd.to_datetime('2018-05-04')] # use the same dataset as validation set
 
     return df_train, df_test
@@ -222,13 +225,17 @@ def evaluate(gbm, df_slice, features, t, date_range, genNext):
     print(st, ed)
     y_pred = []
     y_test = []
+    scores = []
     tot = 0
     df_test = pd.merge(df_slice, pd.DataFrame({'utc_time': date_range}), how='right', on='utc_time').sort_values(by=['utc_time'])
     while st + timedelta(days=1) < ed:
-        y_pred += stra.gbm_predict(gbm, df_slice_dropna, 48, st, genNext, features)
+        y1 = stra.gbm_predict(gbm, df_slice_dropna, 48, st, genNext, features)
+        y_pred += y1
         df_test_slice = df_test[df_test.utc_time >= st].iloc[:48]
         # print('df_test_slice=\n{}'.format(df_test_slice))
-        y_test += list(df_test_slice[t+'_raw'])
+        y2 = list(df_test_slice[t+'_raw'])
+        y_test += y2
+        scores.append([_smape(y1, y2), st])
         assert df_test_slice.utc_time.min() >= st and df_test_slice.utc_time.max() < st + timedelta(hours=48) and \
             df_test_slice.utc_time.is_unique, df_test_slice.utc_time
         tot += 48
@@ -238,10 +245,17 @@ def evaluate(gbm, df_slice, features, t, date_range, genNext):
     assert len(y_pred) == tot, ('length not equal', len(y_pred), tot)
     score = _smape(y_test, y_pred)
     print('The smape of pickled model\'s prediction is:', score)
-    return score, y_pred, y_test
+    scores = pd.DataFrame(scores).rename(columns={0: 'score', 1: 'utc_time'}, index=str)
+    scores = scores.pivot_table(columns='utc_time', values='score')
+    scores['stationId'] = df_slice.stationId.values[0]
+    scores['gas'] = t
+    scores.reset_index(drop=True, inplace=True)
+    print('All score is:', scores)
+    return score, y_pred, y_test, scores
 
 # @profile
 def work(df, import_table, t, s, _s, score_table, ans):
+    global scores_table
     print(t)
     stra.setStation(s)
     df_slice = df.loc[df['stationId']==s]
@@ -287,7 +301,7 @@ def work(df, import_table, t, s, _s, score_table, ans):
         if args.no_evaluate:
             date_range = pd.date_range(Min, Min, freq='1H')
             print(date_range)
-        score, y_pred, y_test = evaluate(mod, df_slice, features, t, date_range, stra.createGenNext(t))
+        score, y_pred, y_test, scores = evaluate(mod, df_slice, features, t, date_range, stra.createGenNext(t))
     sys.stdout = sys.__stdout__
     if not deploy:
         print_prof_data()
@@ -297,8 +311,10 @@ def work(df, import_table, t, s, _s, score_table, ans):
         import_table = pd.concat([import_table, importance]) if import_table is not None else importance
 
         score_table[t].append(score)
+        scores_table = scores_table.append(scores)
         plot(y_pred, y_test, os.path.join(OutPath, s), t)
         # save_mod(mod, os.path.join(OutPath, s), t)
+        print('scores={}'.format(scores))
         print('score={}'.format(score))
         print('mean={}'.format(np.array(filter(lambda x: x==x, score_table[t])).mean()))
     if deploy:
@@ -307,7 +323,7 @@ def work(df, import_table, t, s, _s, score_table, ans):
 
 # @profile
 def main():
-    global OutPath, deploy, args, stra
+    global OutPath, deploy, args, stra, scores_table
     parser = argparse.ArgumentParser()
     parser.add_argument("out")
     parser.add_argument("--outcsv")
@@ -353,6 +369,7 @@ def main():
     print(fix_map)
 
     score_table = {'stationId': [], 'PM2.5': [], "PM10":[], "O3": []}
+    scores_table = pd.DataFrame()
     import_table = None
     for (idx, _s) in enumerate(target_stations):
         s = fix_map[_s]
@@ -365,6 +382,7 @@ def main():
 
     if not deploy:
         pd.DataFrame(score_table).to_csv(os.path.join(OutPath, 'score.csv'), index=False)
+        scores_table.to_csv(os.path.join(OutPath, 'scores.csv'), index=False)
         import_table.to_csv(os.path.join(OutPath, 'import_table.csv'), index=False)
         pd.DataFrame(import_table.groupby(['gas', 'feature']).mean()).reset_index()\
             .sort_values(by=['gas', 'importance'], ascending=False).to_csv(os.path.join(OutPath, 'import_table_sorted.csv'), index=False)
