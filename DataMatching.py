@@ -225,6 +225,8 @@ def fillna(df):
     # gas = set(df.columns)-set(['utc_time', 'city', 'stationId', 'meo', 'grid', 'weather']) # TODO: Add weather 
     gas = set(['PM10', 'NO2', 'PM2.5', 'CO', 'O3', 'SO2']) # TODO: more collumns
     df = df.copy()
+    for g in ['PM10', 'PM2.5', 'O3']:
+        df[g+'na'] = df[g].isna()
     def fill(df, group):
         a = df.groupby(group, sort=False)
         for c in gas:
